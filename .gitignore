@@ -1,0 +1,10 @@
+/artifacts/
+/dist/
+/workspace/
+/.local/
+*.exe
+*.msi
+*.log
+*.status
+*.lock
+*~

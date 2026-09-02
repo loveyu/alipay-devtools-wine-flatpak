@@ -1,0 +1,9 @@
+{
+  "pages": [
+    "pages/index/index"
+  ],
+  "window": {
+    "defaultTitle": "Wine 兼容性测试",
+    "titleBarColor": "#1677ff"
+  }
+}
