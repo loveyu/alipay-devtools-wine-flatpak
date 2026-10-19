@@ -1,0 +1,16 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=支付宝小程序开发者工具（Wine）
+Name[en]=Alipay Mini Program Studio (Wine)
+GenericName=小程序开发工具
+Comment=通过共享 Deepin Wine 基础包运行 Windows 支付宝小程序开发者工具
+Keywords=Alipay;Mini Program;MiniProgramStudio;DevTools;IDE;Wine;
+Keywords[zh_CN]=支付宝;支付宝开发者工具;小程序;开发工具;IDE;Wine;
+Exec=alipay-devtools-wine
+TryExec=alipay-devtools-wine
+Icon=io.github.loveyu.AlipayDevToolsWine
+Terminal=false
+Categories=Development;IDE;
+StartupNotify=true
+StartupWMClass=alipay-devtools-wine

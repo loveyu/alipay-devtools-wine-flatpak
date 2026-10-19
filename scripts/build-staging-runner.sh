@@ -5,28 +5,34 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 source "${SCRIPT_DIR}/common.sh"
 
-WINE_VERSION="11.0"
-WINE_SHA256="c07a6857933c1fc60dff5448d79f39c92481c1e9db5aa628db9d0358446e0701"
-WINE_URL="https://dl.winehq.org/wine/source/11.0/wine-11.0.tar.xz"
-STAGING_TAG="v11.0"
-STAGING_COMMIT="6cc805ea57132eeaf44764e9213823c9b8d0d300"
-STAGING_SHA256="226dc2fc10ec4eb64d7dbc7c66fcf262ea52aa0e3362b9d61b715d85897cbeb3"
+WINE_VERSION="11.17"
+WINE_SHA256="8e752e29bba2901ad9f915139345c6ee67184b099d425704d915971ca5c055fc"
+WINE_URL="https://dl.winehq.org/wine/source/11.x/wine-11.17.tar.xz"
+STAGING_TAG="v11.17"
+STAGING_COMMIT="83acf91a00c7db33ac85a704293159fb47aaed24"
+STAGING_SHA256="8bbee364a66a97da5ac12e7c64b959537da8e424f46acb08f5384e130ea6ca2d"
 STAGING_URL="https://gitlab.winehq.org/wine/wine-staging/-/archive/${STAGING_TAG}/wine-staging-${STAGING_TAG}.tar.gz"
 
 FLATPAK_REMOTE="${ALIPAY_FLATPAK_REMOTE:-}"
 LOCAL_REMOTE="alipay-wine-staging-local"
 LOCAL_REPO="${DATA_DIR}/staging-flatpak-repo"
 BUILD_ROOT="${CACHE_DIR}/staging-runner-build/${WINE_VERSION}-${STAGING_COMMIT}"
+SOURCE_CACHE_DIR="${WINE_SOURCE_CACHE_DIR:-${PROJECT_DIR}/../source-cache}"
+PORTAL_PATCH_DIR="${PROJECT_DIR}/patches/wine-portal"
+PORTAL_PATCH_SIGNATURE="$(sha256sum "${PORTAL_PATCH_DIR}"/*.patch | \
+    sha256sum | awk '{print $1}')"
+SOURCE_SIGNATURE="${STAGING_COMMIT}:${PORTAL_PATCH_SIGNATURE}"
 SOURCE_DIR="${BUILD_ROOT}/source"
 STAGING_DIR="${BUILD_ROOT}/wine-staging"
 BUILD_DIR="${BUILD_ROOT}/build-wow64"
-APP_DIR="${BUILD_ROOT}/appdir"
-WINE_ARCHIVE="${CACHE_DIR}/wine-${WINE_VERSION}.tar.xz"
-STAGING_ARCHIVE="${CACHE_DIR}/wine-staging-${STAGING_TAG}.tar.gz"
+APP_DIR="${BUILD_ROOT}/appdir-${STAGING_RUNNER_APP}-portal-${PORTAL_PATCH_SIGNATURE:0:12}"
+WINE_ARCHIVE="${SOURCE_CACHE_DIR}/wine-${WINE_VERSION}.tar.xz"
+STAGING_ARCHIVE="${SOURCE_CACHE_DIR}/wine-staging-${STAGING_TAG}.tar.gz"
 STATUS_FILE="${STATE_DIR}/staging-runner-build.status"
 LOCK_FILE="${STATE_DIR}/staging-runner-build.lock"
 LOG_FILE="${LOG_DIR}/staging-runner-build.log"
 BUILD_JOBS="${BUILD_JOBS:-14}"
+CONFIGURE_SIGNATURE="${WINE_VERSION}:${SOURCE_SIGNATURE}:new-wow64-without-opencl-v2"
 
 rotate_log "${LOG_FILE}" 104857600
 exec >> "${LOG_FILE}" 2>&1
@@ -53,7 +59,7 @@ on_error() {
 }
 trap on_error ERR
 
-mkdir -p "${BUILD_ROOT}" "${LOCAL_REPO}"
+mkdir -p "${BUILD_ROOT}" "${LOCAL_REPO}" "${SOURCE_CACHE_DIR}"
 build_status install-sdk "org.freedesktop.Sdk//25.08"
 if [[ -z "${FLATPAK_REMOTE}" ]]; then
     for remote_candidate in flathub flathub-wecom; do
@@ -97,8 +103,12 @@ build_status download-sources "wine=${WINE_VERSION},staging=${STAGING_TAG}"
 download_checked "${WINE_URL}" "${WINE_ARCHIVE}" "${WINE_SHA256}"
 download_checked "${STAGING_URL}" "${STAGING_ARCHIVE}" "${STAGING_SHA256}"
 
-build_status apply-staging "${STAGING_COMMIT}"
-if [[ ! -f "${SOURCE_DIR}/.alipay-staging-patched" ]]; then
+build_status apply-staging "${SOURCE_SIGNATURE}"
+current_source_signature=''
+if [[ -f "${SOURCE_DIR}/.alipay-source-signature" ]]; then
+    current_source_signature="$(<"${SOURCE_DIR}/.alipay-source-signature")"
+fi
+if [[ "${current_source_signature}" != "${SOURCE_SIGNATURE}" ]]; then
     prepare_dir="${BUILD_ROOT}/source.prepare.$$"
     staging_prepare="${BUILD_ROOT}/staging.prepare.$$"
     mkdir -p "${prepare_dir}" "${staging_prepare}"
@@ -112,9 +122,35 @@ if [[ ! -f "${SOURCE_DIR}/.alipay-staging-patched" ]]; then
         org.freedesktop.Sdk//25.08 \
         -c 'python3 "$1/staging/patchinstall.py" DESTDIR="$2" --all' \
         sh "${staging_prepare}" "${prepare_dir}"
+
+    build_status apply-portal "${PORTAL_PATCH_SIGNATURE}"
+    for patch_file in "${PORTAL_PATCH_DIR}"/*.patch; do
+        patch --directory="${prepare_dir}" --strip=1 --forward --batch \
+            --no-backup-if-mismatch --dry-run < "${patch_file}" >/dev/null
+        patch --directory="${prepare_dir}" --strip=1 --forward --batch \
+            --no-backup-if-mismatch < "${patch_file}"
+    done
     printf '%s\n' "${STAGING_COMMIT}" > "${prepare_dir}/.alipay-staging-patched"
+    printf '%s\n' "${SOURCE_SIGNATURE}" > "${prepare_dir}/.alipay-source-signature"
+
+    previous_source=''
+    previous_staging=''
+    if [[ -e "${SOURCE_DIR}" ]]; then
+        previous_source="${BUILD_ROOT}/source.previous.$$"
+        mv "${SOURCE_DIR}" "${previous_source}"
+    fi
+    if [[ -e "${STAGING_DIR}" ]]; then
+        previous_staging="${BUILD_ROOT}/wine-staging.previous.$$"
+        mv "${STAGING_DIR}" "${previous_staging}"
+    fi
     mv "${prepare_dir}" "${SOURCE_DIR}"
     mv "${staging_prepare}" "${STAGING_DIR}"
+    if [[ -n "${previous_source}" ]]; then
+        rm -rf -- "${previous_source}"
+    fi
+    if [[ -n "${previous_staging}" ]]; then
+        rm -rf -- "${previous_staging}"
+    fi
 fi
 
 build_status initialize-appdir "${STAGING_RUNNER_APP}"
@@ -132,17 +168,22 @@ flatpak build \
     --allow=devel \
     --bind-mount="/run/build=${BUILD_ROOT}" \
     --env="BUILD_JOBS=${BUILD_JOBS}" \
+    --env="CONFIGURE_SIGNATURE=${CONFIGURE_SIGNATURE}" \
     "${APP_DIR}" bash -lc '
         set -Eeuo pipefail
         export PATH="/usr/lib/sdk/mingw-w64/bin:${PATH}"
         cd /run/build/build-wow64
-        if [[ ! -f Makefile ]]; then
+        if [[ ! -f Makefile ]] || \
+           [[ ! -f .alipay-configure-signature ]] || \
+           [[ "$(< .alipay-configure-signature)" != "${CONFIGURE_SIGNATURE}" ]]; then
             /run/build/source/configure \
                 --prefix=/app \
                 --libdir=/app/lib \
                 --enable-archs=i386,x86_64 \
                 --disable-winemenubuilder \
-                --disable-tests
+                --disable-tests \
+                --without-opencl
+            printf "%s\n" "${CONFIGURE_SIGNATURE}" > .alipay-configure-signature
         fi
         make -j"${BUILD_JOBS}"
         make install \
@@ -151,8 +192,24 @@ flatpak build \
             INSTALL_PROGRAM_FLAGS=-s
     '
 
+build_status install-host-integration "portal=${PORTAL_PATCH_SIGNATURE}"
+flatpak build \
+    --allow=devel \
+    --bind-mount="/run/project=${PROJECT_DIR}" \
+    "${APP_DIR}" bash -lc '
+        set -Eeuo pipefail
+        export PATH="/usr/lib/sdk/mingw-w64/bin:${PATH}"
+        install -m 0755 /run/project/scripts/alipay-host-open.sh \
+            /app/bin/alipay-host-open
+        install -d -m 0755 /app/share/alipay-portal-tests
+        x86_64-w64-mingw32-gcc -municode -O2 -s \
+            -o /app/share/alipay-portal-tests/portal-smoke.exe \
+            /run/project/tests/portal-smoke.c \
+            -lcomdlg32 -lshell32 -lole32 -luuid
+    '
+
 build_status finish-flatpak "${STAGING_RUNNER_APP}"
-if [[ ! -f "${BUILD_ROOT}/.finished" ]]; then
+if [[ ! -f "${APP_DIR}/.alipay-finished" ]]; then
     mkdir -p \
         "${APP_DIR}/files/share/wine/gecko" \
         "${APP_DIR}/files/share/wine/mono"
@@ -165,18 +222,19 @@ if [[ ! -f "${BUILD_ROOT}/.finished" ]]; then
         --socket=pulseaudio \
         --device=dri \
         --filesystem=xdg-download/AlipayDevTools:create \
+        --talk-name=org.freedesktop.FileManager1 \
         --env=WINEPREFIX=/var/data/wine-alipay-devtools \
         --extension=org.winehq.Wine.gecko=directory=share/wine/gecko \
         --extension=org.winehq.Wine.gecko=version=stable-25.08 \
         --extension=org.winehq.Wine.mono=directory=share/wine/mono \
         --extension=org.winehq.Wine.mono=version=stable-25.08 \
         "${APP_DIR}"
-    printf '%s\n' "${STAGING_COMMIT}" > "${BUILD_ROOT}/.finished"
+    printf '%s\n' "${STAGING_COMMIT}" > "${APP_DIR}/.alipay-finished"
 fi
 
 build_status export-flatpak "${LOCAL_REPO}"
 flatpak build-export --disable-fsync \
-    --subject="Wine ${WINE_VERSION} Staging ${STAGING_TAG} new WoW64 for Alipay DevTools" \
+    --subject="Wine ${WINE_VERSION} Staging ${STAGING_TAG} new WoW64 with Portal for Alipay DevTools" \
     "${LOCAL_REPO}" "${APP_DIR}" "${STAGING_RUNNER_BRANCH}"
 
 local_url="file://${LOCAL_REPO}"

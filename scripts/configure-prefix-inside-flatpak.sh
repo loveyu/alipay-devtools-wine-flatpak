@@ -2,8 +2,12 @@
 
 set -Eeuo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+
 wineboot --update
 winecfg -v win10
+wine reg.exe add 'HKCU\Software\Wine\X11 Driver' \
+    /v FileDialogPortal /t REG_SZ /d auto /f
 wine reg.exe add 'HKCU\Software\Wine\X11 Driver' /v UseXIM /t REG_SZ /d Y /f
 wine reg.exe add 'HKCU\Software\Wine\X11 Driver' /v InputStyle /t REG_SZ /d overthespot /f
 wine reg.exe add 'HKCU\Software\Wine\X11 Driver' /v Decorated /t REG_SZ /d Y /f
@@ -29,4 +33,7 @@ if [[ -n "${font_family}" ]]; then
             /v "${font_name}" /t REG_SZ /d "${font_family}" /f
     done
 fi
+
+"${SCRIPT_DIR}/configure-host-file-open.sh"
+wineserver --kill
 wineserver --wait

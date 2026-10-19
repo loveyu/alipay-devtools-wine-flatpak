@@ -9,6 +9,8 @@ load_desktop_environment
 printf '== state ==\n'
 sed -n '1,20p' "${STATE_DIR}/app.status" 2>/dev/null || true
 printf 'program=%s\n' "$(cat "${STATE_DIR}/program.host-path" 2>/dev/null || true)"
+printf 'runner=%s\nprefix=%s\n' "${RUNNER_REF}" "${WINEPREFIX_HOST}"
+printf 'variant=%s\n' "${RUNNER_VARIANT}"
 scale_factor="$(detect_system_scale_factor)"
 printf '\n== scale ==\n'
 printf 'system_scale=%s\n' "${scale_factor}"

@@ -9,26 +9,31 @@ XDG_STATE_HOME="${XDG_STATE_HOME:-${HOME}/.local/state}"
 XDG_CACHE_HOME="${XDG_CACHE_HOME:-${HOME}/.cache}"
 
 APP_SLUG="alipay-devtools-wine-flatpak"
-DATA_DIR="${ALIPAY_DEVTOOLS_DATA_DIR:-${XDG_DATA_HOME}/${APP_SLUG}}"
-STATE_DIR="${ALIPAY_DEVTOOLS_STATE_DIR:-${XDG_STATE_HOME}/${APP_SLUG}}"
-CACHE_DIR="${ALIPAY_DEVTOOLS_CACHE_DIR:-${XDG_CACHE_HOME}/${APP_SLUG}}"
-LOG_DIR="${STATE_DIR}/logs"
-WINEPREFIX_HOST="${DATA_DIR}/wine-prefix"
-WORKSPACE_DIR="${DATA_DIR}/workspace"
 SCALE_FACTOR_OVERRIDE="${ALIPAY_DEVTOOLS_SCALE_FACTOR:-${DEVTOOLS_SCALE_FACTOR:-}}"
 
+DEEPIN_RUNNER_APP="io.github.loveyu.AlipayDevToolsWine"
+DEEPIN_RUNNER_BRANCH="stable-25.08"
+SHARED_WINE_ID="io.github.loveyu.Wine.Deepin"
+SHARED_WINE_BRANCH="10.14deepin11-25.08"
 BASELINE_RUNNER_APP="io.github.huzhiyu.WeComWine"
 BASELINE_RUNNER_BRANCH="stable-25.08"
-STAGING_RUNNER_APP="io.github.huzhiyu.AlipayDevToolsWine"
+STAGING_RUNNER_APP="io.github.loveyu.AlipayDevToolsWine"
 STAGING_RUNNER_BRANCH="staging-25.08"
-RUNNER_VARIANT="${ALIPAY_DEVTOOLS_RUNNER_VARIANT:-baseline}"
+RUNNER_VARIANT="${ALIPAY_DEVTOOLS_RUNNER_VARIANT:-deepin}"
 case "${RUNNER_VARIANT}" in
+    deepin)
+        APP_SLUG+="-deepin"
+        RUNNER_APP="${DEEPIN_RUNNER_APP}"
+        RUNNER_BRANCH="${DEEPIN_RUNNER_BRANCH}"
+        WINEARCH_VALUE="win64"
+        ;;
     baseline)
         RUNNER_APP="${BASELINE_RUNNER_APP}"
         RUNNER_BRANCH="${BASELINE_RUNNER_BRANCH}"
         WINEARCH_VALUE="win64"
         ;;
     staging)
+        APP_SLUG+="-staging"
         RUNNER_APP="${STAGING_RUNNER_APP}"
         RUNNER_BRANCH="${STAGING_RUNNER_BRANCH}"
         WINEARCH_VALUE="wow64"
@@ -39,6 +44,12 @@ case "${RUNNER_VARIANT}" in
         ;;
 esac
 RUNNER_REF="${RUNNER_APP}//${RUNNER_BRANCH}"
+DATA_DIR="${ALIPAY_DEVTOOLS_DATA_DIR:-${XDG_DATA_HOME}/${APP_SLUG}}"
+STATE_DIR="${ALIPAY_DEVTOOLS_STATE_DIR:-${XDG_STATE_HOME}/${APP_SLUG}}"
+CACHE_DIR="${ALIPAY_DEVTOOLS_CACHE_DIR:-${XDG_CACHE_HOME}/${APP_SLUG}}"
+LOG_DIR="${STATE_DIR}/logs"
+WINEPREFIX_HOST="${DATA_DIR}/wine-prefix"
+WORKSPACE_DIR="${DATA_DIR}/workspace"
 
 DEVTOOLS_VERSION="${ALIPAY_DEVTOOLS_VERSION:-3.10.5}"
 DEVTOOLS_INSTALLER="MiniProgramStudio-${DEVTOOLS_VERSION}-x64.exe"
@@ -144,11 +155,36 @@ scale_factor_to_wine_dpi() {
     LC_ALL=C awk -v scale="$1" 'BEGIN { printf "%d\n", int(scale * 96 + 0.5) }'
 }
 
+electron_compatibility_args() {
+    local argument has_angle=0 has_no_sandbox=0
+
+    [[ "${RUNNER_VARIANT}" == deepin ]] || return 0
+    for argument in "$@"; do
+        case "${argument}" in
+            --use-angle=*|--use-gl=*) has_angle=1 ;;
+            --no-sandbox) has_no_sandbox=1 ;;
+        esac
+    done
+    # 与微信开发者工具使用同一引擎兼容参数，避免 Chromium GPU 初始化反复失败。
+    # 外层 Flatpak 仍负责进程及文件访问隔离。
+    if (( ! has_no_sandbox )); then printf '%s\n' --no-sandbox; fi
+    if (( ! has_angle )); then printf '%s\n' --use-angle=d3d11; fi
+    return 0
+}
+
 flatpak_wine() {
     local command_name="$1"
+    local -a extra_environment=()
     shift
 
     load_desktop_environment
+
+    if [[ -n "${PORTAL_SMOKE_TIMEOUT_MS:-}" ]]; then
+        extra_environment+=(--env="PORTAL_SMOKE_TIMEOUT_MS=${PORTAL_SMOKE_TIMEOUT_MS}")
+    fi
+    if [[ -n "${WINE_FORCE_PORTAL:-}" ]]; then
+        extra_environment+=(--env="WINE_FORCE_PORTAL=${WINE_FORCE_PORTAL}")
+    fi
 
     flatpak run \
         --user \
@@ -167,6 +203,7 @@ flatpak_wine() {
         --env="GTK_IM_MODULE=fcitx" \
         --env="QT_IM_MODULE=fcitx" \
         --env="WINEDEBUG=${WINEDEBUG_VALUE:--all}" \
+        "${extra_environment[@]}" \
         --command="${command_name}" \
         "${RUNNER_APP}" "$@"
 }

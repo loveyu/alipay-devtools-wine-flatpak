@@ -11,13 +11,17 @@ LOG_FILE="${LOG_DIR}/app.log"
 LOCK_FILE="${STATE_DIR}/app.lock"
 exec 9> "${LOCK_FILE}"
 flock -n 9 || exit 75
+rotate_log "${LOG_FILE}"
 exec >> "${LOG_FILE}" 2>&1
 
 [[ -s "${PROGRAM_FILE}" ]] || "${SCRIPT_DIR}/install.sh"
+"${SCRIPT_DIR}/enable-service-host.sh" >/dev/null
 program_windows="$(<"${PROGRAM_FILE}")"
 scale_factor="$(detect_system_scale_factor)"
 wine_dpi="$(scale_factor_to_wine_dpi "${scale_factor}")"
 launch_args=("$@")
+mapfile -t compatibility_args < <(electron_compatibility_args "${launch_args[@]}")
+launch_args=("${compatibility_args[@]}" "${launch_args[@]}")
 has_scale_argument=0
 for argument in "${launch_args[@]}"; do
     if [[ "${argument}" == --force-device-scale-factor=* ]]; then
